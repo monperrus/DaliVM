@@ -425,7 +425,13 @@ def execute_invoke_direct(vm: 'DalvikVM'):
                 elif isinstance(a, str):
                     seed = a
             sb.internal_value = seed
-    
+
+    # Any other invoke-direct is an app constructor or a private method: run it.
+    # Without this, <init> never executes, so no instance field is ever set and
+    # every constructed object is blank (Rot(13).shift read back as 0).
+    elif "->" in trace_str and vm.class_loader:
+        vm.class_loader.resolve_and_execute(method_idx, args, vm, trace_str)
+
     vm.pc += 5
 
 def _builtin_static_hooks(vm: 'DalvikVM', args, trace_str):
