@@ -209,6 +209,23 @@ def _builtin_virtual_hooks(vm: 'DalvikVM', args, trace_str):
     # =========================================================================
     # List interface methods - work with _list_data attribute on DalvikObject
     # =========================================================================
+    elif "Ljava/util/List;->add" in trace_str or "Ljava/util/ArrayList;->add" in trace_str:
+        # List.add(e) -> boolean. new-instance does not run the (external)
+        # <init>, so back the list lazily on first use.
+        if len(args) >= 2:
+            list_obj = args[0].value if hasattr(args[0], 'value') else args[0]
+            if isinstance(list_obj, DalvikObject):
+                if not hasattr(list_obj, '_list_data'):
+                    list_obj._list_data = []
+                list_obj._list_data.append(args[1].value if hasattr(args[1], 'value') else args[1])
+                ret_val = 1  # true
+
+    elif "Ljava/util/List;->isEmpty" in trace_str or "Ljava/util/ArrayList;->isEmpty" in trace_str:
+        if args:
+            list_obj = args[0].value if hasattr(args[0], 'value') else args[0]
+            data = getattr(list_obj, '_list_data', None)
+            ret_val = 1 if not data else 0
+
     elif "Ljava/util/List;->iterator" in trace_str or "Ljava/util/ArrayList;->iterator" in trace_str:
         # List.iterator() -> returns Iterator that wraps the list
         if args:
