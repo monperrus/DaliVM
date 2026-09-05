@@ -125,8 +125,12 @@ class LazyClassLoader:
         class_name = parts[0]
         method_with_sig = parts[1]
         method_name = method_with_sig.split("(")[0]
-        
-        return self.find_method(class_name, method_name)
+
+        # Keep the descriptor so an overloaded method (especially a constructor:
+        # <init>()V delegating to <init>(I F I)V) resolves to the right overload
+        # instead of the first same-named one.
+        full_sig = "(" + method_with_sig.split("(", 1)[1] if "(" in method_with_sig else None
+        return self.find_method_with_sig(class_name, method_name, full_sig)
     
     def find_method_by_trace(self, trace_str: str) -> Optional[Any]:
         """Find a method by parsing the trace string from invoke instruction.
@@ -151,8 +155,11 @@ class LazyClassLoader:
             # Look for pattern: LClass;->method(...)Type
             import re
             # Match: LClassName;->methodName(params)ReturnType
-            # The params may contain spaces like "I I I" 
-            match = re.search(r'(L[^;]+;->[\w\u0080-\uFFFF]+\([^)]*\)[^\s,]*)', trace_str)
+            # The params may contain spaces like "I I I". The name char class must
+            # include < and > so <init>/<clinit> match -- otherwise a constructor
+            # call falls through to the signature-less idx path and resolves to
+            # the wrong overload (a delegating <init> then recurses forever).
+            match = re.search(r'(L[^;]+;->[\w<>\u0080-\uFFFF]+\([^)]*\)[^\s,]*)', trace_str)
             if match:
                 method_part = match.group(1)
             else:
@@ -505,19 +512,24 @@ class LazyClassLoader:
         store = get_static_field_store()
         if store.is_class_initialized(class_name):
             return
-        
+
+        # Mark initialized BEFORE running the body. Per the JLS, a thread that
+        # recursively re-requests initialization of a class it is already
+        # initializing must proceed without re-running <clinit>. Runtime.<clinit>
+        # does `new Runtime(); ...`, and Runtime.<init> touches the class again,
+        # re-triggering <clinit> -- without this guard that recurses forever.
+        store.mark_class_initialized(class_name)
+
         # First, load initial field values from class definition
         self._load_static_field_values(class_name, store)
-        
+
         # Then find and run <clinit> if it exists
         clinit = self.find_method(class_name, "<clinit>")
         if not clinit:
-            store.mark_class_initialized(class_name)
             return
-        
+
         method_info = self.get_method_bytecode(clinit)
         if not method_info:
-            store.mark_class_initialized(class_name)
             return
         
         bytecode, regs_size, trace_map = method_info
@@ -542,9 +554,7 @@ class LazyClassLoader:
             else:
                 break
             step += 1
-        
-        store.mark_class_initialized(class_name)
-    
+
     def _superclass_of(self, class_name: str) -> Optional[str]:
         """Superclass name of an app class, via Androguard (cached)."""
         if getattr(self, '_superclass_map', None) is None:

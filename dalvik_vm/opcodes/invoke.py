@@ -56,6 +56,33 @@ def execute_invoke_virtual(vm: 'DalvikVM'):
     
     vm.pc += 5
 
+def _bits_to_double(v):
+    """Interpret a double register (raw IEEE-754 bits held as an int) as a float.
+    Already a float (rare) -> returned as-is."""
+    if isinstance(v, float):
+        return v
+    if isinstance(v, int):
+        import struct
+        try:
+            return struct.unpack('<d', struct.pack('<q', v & 0xFFFFFFFFFFFFFFFF))[0]
+        except Exception:
+            return float(v)
+    return 0.0
+
+
+def _bits_to_float(v):
+    """Interpret a float register (raw 32-bit IEEE-754 bits held as an int)."""
+    if isinstance(v, float):
+        return v
+    if isinstance(v, int):
+        import struct
+        try:
+            return struct.unpack('<f', struct.pack('<i', v & 0xFFFFFFFF if v >= 0 else v))[0]
+        except Exception:
+            return float(v)
+    return 0.0
+
+
 def descriptor_of(trace_str: str) -> str:
     """The argument descriptor of the invoked method, e.g. '(C)' -> 'C'.
 
@@ -589,6 +616,31 @@ def _builtin_static_hooks(vm: 'DalvikVM', args, trace_str):
             else:
                 int_obj.internal_value = 0
             ret_val = int_obj
+
+    # The other primitive boxes: Long/Short/Byte/Double/Float/Character.valueOf.
+    # Without these, autoboxing a non-int primitive (e.g. a double into an
+    # Object[] for String.format("%f", d)) produced a value-less box read as null.
+    elif any(p in trace_str for p in (
+            "Long;->valueOf", "Short;->valueOf", "Byte;->valueOf",
+            "Double;->valueOf", "Float;->valueOf", "Character;->valueOf")):
+        if args:
+            arg = args[0].value if hasattr(args[0], 'value') else args[0]
+            if isinstance(arg, DalvikObject) and hasattr(arg, 'internal_value'):
+                arg = arg.internal_value
+            cls = trace_str.split("->")[0]
+            cls = "L" + cls[cls.rindex("L") + 1:] if "L" in cls else "Ljava/lang/Object;"
+            box = DalvikObject(cls)
+            if "Double;->valueOf" in trace_str:
+                # A double register holds the raw IEEE-754 bit pattern as an int
+                # (DaliVM has no float register type); reinterpret it back.
+                box.internal_value = _bits_to_double(arg)
+            elif "Float;->valueOf" in trace_str:
+                box.internal_value = _bits_to_float(arg)
+            elif isinstance(arg, (int, float)):
+                box.internal_value = int(arg)
+            else:
+                box.internal_value = 0
+            ret_val = box
     
     # System.arraycopy(Object src, int srcPos, Object dest, int destPos, int length)
     # --- native floor -----------------------------------------------------

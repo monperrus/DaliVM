@@ -20,6 +20,7 @@ from .utility_hooks import (
     _hook_base64_encode_to_string,
     _hook_base64_decode,
 )
+from .format_hooks import _hook_string_format
 from .reflection_hooks import (
     _hook_class_forname,
     _hook_class_getmethod,
@@ -105,6 +106,10 @@ ANDROID_STATIC_HOOKS: Dict[str, Callable] = {
     "Base64;->encodeToString": _hook_base64_encode_to_string,
     "Base64;->encode": _hook_base64_encode,
     "Base64;->decode": _hook_base64_decode,
+
+    # java.lang.String.format -- a printf hook (Formatter's real bytecode pulls
+    # in Locale + the regex engine; too deep to run, so implement the leaf).
+    "String;->format": _hook_string_format,
 }
 
 
