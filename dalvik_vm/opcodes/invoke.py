@@ -123,17 +123,29 @@ def _builtin_virtual_hooks(vm: 'DalvikVM', args, trace_str):
             ret_val = new_arr
     
     elif "getBytes" in trace_str and "Ljava/lang/String;" in trace_str:
-        # String.getBytes() -> byte array
+        # String.getBytes([charset]) -> byte array.
+        #
+        # This was encoding UTF-16LE unconditionally, which is wrong: Java's
+        # default charset on Android is UTF-8, and getBytes("UTF-8") is the
+        # common case in the string-decryption code this tool targets. Encoding
+        # UTF-16LE produced twice as many bytes (and a BOM-free wide encoding),
+        # so every downstream digest/cipher/Base64 over the result was wrong.
+        # Honour the charset argument when present; default to UTF-8.
         if args and args[0] is not None:
             s = args[0].value
-            if isinstance(s, DalvikObject) and hasattr(s, 'internal_value'):
-                # Use surrogatepass to handle surrogate characters
-                byte_data = s.internal_value.encode('utf-16-le', errors='surrogatepass')
-                arr = DalvikArray('B', len(byte_data))
-                arr.data = list(byte_data)
-                ret_val = arr
-            elif isinstance(s, str):
-                byte_data = s.encode('utf-16-le', errors='surrogatepass')
+            text = s.internal_value if isinstance(s, DalvikObject) and hasattr(s, 'internal_value') else s
+            if isinstance(text, str):
+                charset = 'utf-8'
+                if len(args) > 1:
+                    named = args[1].value
+                    if isinstance(named, DalvikObject) and hasattr(named, 'internal_value'):
+                        named = named.internal_value
+                    if isinstance(named, str) and named:
+                        charset = named.lower().replace('utf_', 'utf-')
+                try:
+                    byte_data = text.encode(charset, errors='surrogatepass')
+                except LookupError:
+                    byte_data = text.encode('utf-8', errors='surrogatepass')
                 arr = DalvikArray('B', len(byte_data))
                 arr.data = list(byte_data)
                 ret_val = arr
