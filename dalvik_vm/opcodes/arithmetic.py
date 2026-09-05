@@ -4,6 +4,28 @@ if TYPE_CHECKING:
     from ..vm import DalvikVM
 from ..types import RegisterValue
 
+
+def _s32(v):
+    """Wrap an int to a signed 32-bit value (Java int semantics)."""
+    v &= 0xFFFFFFFF
+    return v - 0x100000000 if v > 0x7FFFFFFF else v
+
+
+def _idiv(a, b):
+    """Java integer division: truncates toward zero (Python // floors)."""
+    if b == 0:
+        return 0
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
+def _irem(a, b):
+    """Java integer remainder: sign follows the dividend."""
+    if b == 0:
+        return 0
+    return a - _idiv(a, b) * b
+
+
 # ===== Type Conversions (0x7b-0x8f) =====
 
 def execute_int_to_long(vm: 'DalvikVM'):
@@ -84,14 +106,14 @@ def _arith_23x(vm: 'DalvikVM', op_func):
     v_b = vm.registers.get_int(bb)
     v_c = vm.registers.get_int(cc)
     result = op_func(v_b, v_c)
-    vm.registers[aa] = RegisterValue(result & 0xFFFFFFFF if isinstance(result, int) else result)
+    vm.registers[aa] = RegisterValue(_s32(result) if isinstance(result, int) else result)
     vm.pc += 3
 
 def execute_add_int(vm): _arith_23x(vm, lambda a, b: a + b)
 def execute_sub_int(vm): _arith_23x(vm, lambda a, b: a - b)
 def execute_mul_int(vm): _arith_23x(vm, lambda a, b: a * b)
-def execute_div_int(vm): _arith_23x(vm, lambda a, b: a // b if b != 0 else 0)
-def execute_rem_int(vm): _arith_23x(vm, lambda a, b: a % b if b != 0 else 0)
+def execute_div_int(vm): _arith_23x(vm, _idiv)
+def execute_rem_int(vm): _arith_23x(vm, _irem)
 def execute_and_int(vm): _arith_23x(vm, lambda a, b: a & b)
 def execute_or_int(vm): _arith_23x(vm, lambda a, b: a | b)
 def execute_xor_int(vm): _arith_23x(vm, lambda a, b: a ^ b)
@@ -122,16 +144,14 @@ def _arith_2addr(vm: 'DalvikVM', op_func):
     v_a = vm.registers.get_int(a)
     v_b = vm.registers.get_int(b)
     result = op_func(v_a, v_b)
-    if isinstance(result, int):
-        if result > 0x7FFFFFFF: result -= 0x100000000
-    vm.registers[a] = RegisterValue(result)
+    vm.registers[a] = RegisterValue(_s32(result) if isinstance(result, int) else result)
     vm.pc += 1
 
 def execute_add_int_2addr(vm): _arith_2addr(vm, lambda a, b: a + b)
 def execute_sub_int_2addr(vm): _arith_2addr(vm, lambda a, b: a - b)
 def execute_mul_int_2addr(vm): _arith_2addr(vm, lambda a, b: a * b)
-def execute_div_int_2addr(vm): _arith_2addr(vm, lambda a, b: a // b if b != 0 else 0)
-def execute_rem_int_2addr(vm): _arith_2addr(vm, lambda a, b: a % b if b != 0 else 0)
+def execute_div_int_2addr(vm): _arith_2addr(vm, _idiv)
+def execute_rem_int_2addr(vm): _arith_2addr(vm, _irem)
 def execute_and_int_2addr(vm): _arith_2addr(vm, lambda a, b: a & b)
 def execute_or_int_2addr(vm): _arith_2addr(vm, lambda a, b: a | b)
 def execute_xor_int_2addr(vm): _arith_2addr(vm, lambda a, b: a ^ b)
@@ -162,14 +182,14 @@ def _arith_lit16(vm: 'DalvikVM', op_func):
     lit = int.from_bytes(vm.bytecode[vm.pc+1:vm.pc+3], 'little', signed=True)
     v_b = vm.registers.get_int(b)
     result = op_func(v_b, lit)
-    vm.registers[a] = RegisterValue(result)
+    vm.registers[a] = RegisterValue(_s32(result) if isinstance(result, int) else result)
     vm.pc += 3
 
 def execute_add_int_lit16(vm): _arith_lit16(vm, lambda a, b: a + b)
 def execute_rsub_int(vm): _arith_lit16(vm, lambda a, b: b - a)
 def execute_mul_int_lit16(vm): _arith_lit16(vm, lambda a, b: a * b)
-def execute_div_int_lit16(vm): _arith_lit16(vm, lambda a, b: a // b if b != 0 else 0)
-def execute_rem_int_lit16(vm): _arith_lit16(vm, lambda a, b: a % b if b != 0 else 0)
+def execute_div_int_lit16(vm): _arith_lit16(vm, _idiv)
+def execute_rem_int_lit16(vm): _arith_lit16(vm, _irem)
 def execute_and_int_lit16(vm): _arith_lit16(vm, lambda a, b: a & b)
 def execute_or_int_lit16(vm): _arith_lit16(vm, lambda a, b: a | b)
 def execute_xor_int_lit16(vm): _arith_lit16(vm, lambda a, b: a ^ b)
@@ -188,14 +208,14 @@ def _arith_lit8(vm: 'DalvikVM', op_func):
     cc = int.from_bytes(vm.bytecode[vm.pc+2:vm.pc+3], 'little', signed=True)  # Literal (was +1, WRONG)
     v_b = vm.registers.get_int(bb)
     result = op_func(v_b, cc)
-    vm.registers[aa] = RegisterValue(result)
+    vm.registers[aa] = RegisterValue(_s32(result) if isinstance(result, int) else result)
     vm.pc += 3
 
 def execute_add_int_lit8(vm): _arith_lit8(vm, lambda a, b: a + b)
 def execute_rsub_int_lit8(vm): _arith_lit8(vm, lambda a, b: b - a)
 def execute_mul_int_lit8(vm): _arith_lit8(vm, lambda a, b: a * b)
-def execute_div_int_lit8(vm): _arith_lit8(vm, lambda a, b: a // b if b != 0 else 0)
-def execute_rem_int_lit8(vm): _arith_lit8(vm, lambda a, b: a % b if b != 0 else 0)
+def execute_div_int_lit8(vm): _arith_lit8(vm, _idiv)
+def execute_rem_int_lit8(vm): _arith_lit8(vm, _irem)
 def execute_and_int_lit8(vm): _arith_lit8(vm, lambda a, b: a & b)
 def execute_or_int_lit8(vm): _arith_lit8(vm, lambda a, b: a | b)
 def execute_xor_int_lit8(vm): _arith_lit8(vm, lambda a, b: a ^ b)
@@ -308,8 +328,8 @@ def _arith_long_23x(vm: 'DalvikVM', op_func):
 def execute_add_long(vm): _arith_long_23x(vm, lambda a, b: a + b)
 def execute_sub_long(vm): _arith_long_23x(vm, lambda a, b: a - b)
 def execute_mul_long(vm): _arith_long_23x(vm, lambda a, b: a * b)
-def execute_div_long(vm): _arith_long_23x(vm, lambda a, b: a // b if b != 0 else 0)
-def execute_rem_long(vm): _arith_long_23x(vm, lambda a, b: a % b if b != 0 else 0)
+def execute_div_long(vm): _arith_long_23x(vm, _idiv)
+def execute_rem_long(vm): _arith_long_23x(vm, _irem)
 def execute_and_long(vm): _arith_long_23x(vm, lambda a, b: a & b)
 def execute_or_long(vm): _arith_long_23x(vm, lambda a, b: a | b)
 def execute_xor_long(vm): _arith_long_23x(vm, lambda a, b: a ^ b)
@@ -334,8 +354,8 @@ def _arith_long_2addr(vm: 'DalvikVM', op_func):
 def execute_add_long_2addr(vm): _arith_long_2addr(vm, lambda a, b: a + b)
 def execute_sub_long_2addr(vm): _arith_long_2addr(vm, lambda a, b: a - b)
 def execute_mul_long_2addr(vm): _arith_long_2addr(vm, lambda a, b: a * b)
-def execute_div_long_2addr(vm): _arith_long_2addr(vm, lambda a, b: a // b if b != 0 else 0)
-def execute_rem_long_2addr(vm): _arith_long_2addr(vm, lambda a, b: a % b if b != 0 else 0)
+def execute_div_long_2addr(vm): _arith_long_2addr(vm, _idiv)
+def execute_rem_long_2addr(vm): _arith_long_2addr(vm, _irem)
 def execute_and_long_2addr(vm): _arith_long_2addr(vm, lambda a, b: a & b)
 def execute_or_long_2addr(vm): _arith_long_2addr(vm, lambda a, b: a | b)
 def execute_xor_long_2addr(vm): _arith_long_2addr(vm, lambda a, b: a ^ b)

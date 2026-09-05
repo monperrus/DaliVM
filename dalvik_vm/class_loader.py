@@ -196,7 +196,11 @@ class LazyClassLoader:
         if cache_key in self._method_cache:
             return self._method_cache[cache_key]
         
-        # Search the app's dex, then any attached framework analyses.
+        # Search the app's dex, then any attached framework analyses. Prefer a
+        # definition that actually has bytecode: the app dex holds an
+        # ExternalMethod ref for every framework method it *calls*, and that
+        # code-less ref must not shadow the real body in the framework DEX.
+        fallback = None
         for analysis in [self.dx, *self.extra_analyses]:
             for m in analysis.get_methods():
                 em = m.get_method()
@@ -205,11 +209,15 @@ class LazyClassLoader:
                         actual = (em.get_descriptor() if hasattr(em, 'get_descriptor') else '').replace(' ', '')
                         if actual != expected_sig.replace(' ', ''):
                             continue  # keep looking for the matching overload
-                    self._method_cache[cache_key] = em
-                    return em
+                    has_code = hasattr(em, 'get_code') and em.get_code() is not None
+                    if has_code:
+                        self._method_cache[cache_key] = em
+                        return em
+                    if fallback is None:
+                        fallback = em
 
-        self._method_cache[cache_key] = None
-        return None
+        self._method_cache[cache_key] = fallback
+        return fallback
     
     def get_exception_table(self, method):
         """Try/catch table of a method, as byte ranges into the raw bytecode:

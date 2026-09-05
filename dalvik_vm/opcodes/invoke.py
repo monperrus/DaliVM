@@ -567,6 +567,45 @@ def _builtin_static_hooks(vm: 'DalvikVM', args, trace_str):
             ret_val = int_obj
     
     # System.arraycopy(Object src, int srcPos, Object dest, int destPos, int length)
+    # --- native floor -----------------------------------------------------
+    # java.lang.Character bottoms out in CharacterData (native/tabular), so
+    # framework methods that reach it (Integer.parseInt, Long.parseLong, ...)
+    # need these leaves hooked for the real bytecode above them to complete.
+    elif "Character;->digit" in trace_str and len(args) >= 2:
+        cp = args[0].value if hasattr(args[0], 'value') else args[0]
+        radix = args[1].value if hasattr(args[1], 'value') else args[1]
+        ret_val = -1
+        if isinstance(cp, int) and isinstance(radix, int) and 2 <= radix <= 36:
+            if 0x30 <= cp <= 0x39:
+                v = cp - 0x30
+            elif 0x61 <= cp <= 0x7A:
+                v = cp - 0x61 + 10
+            elif 0x41 <= cp <= 0x5A:
+                v = cp - 0x41 + 10
+            else:
+                v = -1
+            ret_val = v if 0 <= v < radix else -1
+
+    elif "Character;->isDigit" in trace_str and args:
+        cp = args[0].value if hasattr(args[0], 'value') else args[0]
+        ret_val = 1 if isinstance(cp, int) and 0x30 <= cp <= 0x39 else 0
+
+    elif "Character;->toLowerCase" in trace_str and args:
+        cp = args[0].value if hasattr(args[0], 'value') else args[0]
+        ret_val = ord(chr(cp).lower()) if isinstance(cp, int) else cp
+
+    elif "Character;->toUpperCase" in trace_str and args:
+        cp = args[0].value if hasattr(args[0], 'value') else args[0]
+        ret_val = ord(chr(cp).upper()) if isinstance(cp, int) else cp
+
+    elif "Character;->forDigit" in trace_str and len(args) >= 2:
+        digit = args[0].value if hasattr(args[0], 'value') else args[0]
+        radix = args[1].value if hasattr(args[1], 'value') else args[1]
+        if isinstance(digit, int) and isinstance(radix, int) and 0 <= digit < radix <= 36:
+            ret_val = ord("0123456789abcdefghijklmnopqrstuvwxyz"[digit])
+        else:
+            ret_val = 0
+
     elif "System;->arraycopy" in trace_str:
         if len(args) >= 5:
             src = args[0].value if hasattr(args[0], 'value') else args[0]
