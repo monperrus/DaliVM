@@ -208,6 +208,33 @@ class TestArrayOpcodes(BaseOpcodeTest):
         self.execute_opcode(vm, 0x50)
         self.assertEqual(arr.data[1], 88)
 
+    def test_aput_aget_object_keeps_reference(self):
+        """aput-object/aget-object must store and return the object, not 0.
+
+        Regression: aput-object aliased the primitive aput, which coerces the
+        value through get_int() -- so an object element was stored as 0. This
+        broke every Object[] cache (e.g. Integer.SMALL_*_VALUES in toString).
+        """
+        arr = DalvikArray('[Ljava/lang/String;', 3)
+        arr.data = [None, None, None]
+        obj = DalvikObject("Ljava/lang/String;")
+        obj.internal_value = "hi"
+
+        # aput-object v0, v1, v2  (0x4d): store obj at arr[2]
+        vm = self.create_vm(bytes([0x4d, 0x00, 0x01, 0x02]))
+        vm.registers[0] = RegisterValue(obj)
+        vm.registers[1] = RegisterValue(arr)
+        vm.registers[2] = RegisterValue(2)
+        vm.pc = 1
+        self.execute_opcode(vm, 0x4d)
+        self.assertIs(arr.data[2], obj)
+
+        # aget-object v3, v1, v2  (0x46): read it back by identity
+        vm.bytecode = bytes([0x46, 0x03, 0x01, 0x02])
+        vm.pc = 1
+        self.execute_opcode(vm, 0x46)
+        self.assertIs(vm.registers[3].value, obj)
+
 
 class TestControlFlowOpcodes(BaseOpcodeTest):
     """Tests for control flow operations."""

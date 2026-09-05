@@ -170,9 +170,30 @@ def execute_aget(vm: 'DalvikVM'):
     vm.registers[aa] = RegisterValue(val)
     vm.pc += 3
 
+def execute_aget_object(vm: 'DalvikVM'):
+    """aget-object vAA, vBB, vCC -- read an object element by identity.
+
+    The primitive aget reads arr.data[idx] as-is, which already returns a stored
+    object; kept as its own handler for symmetry with aput-object and so a miss
+    on an object array yields None (null) rather than a bare 0.
+    """
+    aa = vm.bytecode[vm.pc]
+    bb = vm.bytecode[vm.pc + 1]
+    cc = vm.bytecode[vm.pc + 2]
+    arr = vm.registers[bb].value
+    idx = vm.registers.get_int(cc)
+    val = None
+    if isinstance(arr, DalvikArray):
+        if 0 <= idx < arr.size:
+            val = arr.data[idx]
+        else:
+            print(f"WARN: Array index out of bounds: {idx} (size {arr.size})")
+    vm.registers[aa] = RegisterValue(val)
+    vm.pc += 3
+
+
 # All aget variants use same format
 execute_aget_wide = execute_aget
-execute_aget_object = execute_aget
 execute_aget_boolean = execute_aget
 execute_aget_byte = execute_aget
 execute_aget_char = execute_aget
@@ -201,9 +222,30 @@ def execute_aput(vm: 'DalvikVM'):
     
     vm.pc += 3
 
+def execute_aput_object(vm: 'DalvikVM'):
+    """aput-object vAA, vBB, vCC -- store an object element by identity.
+
+    The primitive aput coerces the value through get_int(), which turns any
+    object (a String, an array) into 0. Object arrays must keep the reference,
+    so read the raw register value instead. Without this, e.g. Integer.toString
+    for |i|<100 cached a 0 into SMALL_*_VALUES and read it back as 0.
+    """
+    aa = vm.bytecode[vm.pc]
+    bb = vm.bytecode[vm.pc + 1]
+    cc = vm.bytecode[vm.pc + 2]
+    val = vm.registers[aa].value
+    arr = vm.registers[bb].value
+    idx = vm.registers.get_int(cc)
+    if isinstance(arr, DalvikArray):
+        if 0 <= idx < arr.size:
+            arr.data[idx] = val
+        else:
+            print(f"WARN: Array index out of bounds: {idx} (size {arr.size})")
+    vm.pc += 3
+
+
 # All aput variants use same format
 execute_aput_wide = execute_aput
-execute_aput_object = execute_aput
 execute_aput_boolean = execute_aput
 execute_aput_byte = execute_aput
 execute_aput_char = execute_aput
