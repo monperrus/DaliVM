@@ -83,6 +83,18 @@ def _java_text(desc: str, arg) -> str:
     return str(arg)
 
 
+def _map_key(k):
+    """A hashable identity for a Map key.
+
+    Two String objects with the same text must be the same key, so key on the
+    string contents; box int/str directly; fall back to object identity."""
+    if isinstance(k, DalvikObject) and getattr(k, 'internal_value', None) is not None:
+        return ('s', k.internal_value)
+    if isinstance(k, (str, int, bool)):
+        return ('p', k)
+    return ('o', id(k))
+
+
 def _builtin_virtual_hooks(vm: 'DalvikVM', args, trace_str):
     """Built-in hooks for common virtual methods."""
     ret_val = None
@@ -265,6 +277,71 @@ def _builtin_virtual_hooks(vm: 'DalvikVM', args, trace_str):
                 if 0 <= index < len(list_obj.data):
                     ret_val = list_obj.data[index]
     
+    # =========================================================================
+    # Map interface methods - work with _map_data (insertion-ordered) on the object
+    # =========================================================================
+    elif "Ljava/util/Map;->put" in trace_str or "Ljava/util/HashMap;->put" in trace_str:
+        if len(args) >= 3:
+            map_obj = args[0].value if hasattr(args[0], 'value') else args[0]
+            if isinstance(map_obj, DalvikObject):
+                if not hasattr(map_obj, '_map_data'):
+                    map_obj._map_data = {}
+                k = args[1].value if hasattr(args[1], 'value') else args[1]
+                val = args[2].value if hasattr(args[2], 'value') else args[2]
+                prev = map_obj._map_data.get(_map_key(k))
+                map_obj._map_data[_map_key(k)] = (k, val)
+                ret_val = prev[1] if prev else None
+
+    elif "Ljava/util/Map;->get" in trace_str or "Ljava/util/HashMap;->get" in trace_str:
+        if len(args) >= 2:
+            map_obj = args[0].value if hasattr(args[0], 'value') else args[0]
+            k = args[1].value if hasattr(args[1], 'value') else args[1]
+            data = getattr(map_obj, '_map_data', {})
+            entry = data.get(_map_key(k))
+            ret_val = entry[1] if entry else None
+
+    elif "Ljava/util/Map;->containsKey" in trace_str or "Ljava/util/HashMap;->containsKey" in trace_str:
+        if len(args) >= 2:
+            map_obj = args[0].value if hasattr(args[0], 'value') else args[0]
+            k = args[1].value if hasattr(args[1], 'value') else args[1]
+            data = getattr(map_obj, '_map_data', {})
+            ret_val = 1 if _map_key(k) in data else 0
+
+    elif "Ljava/util/Map;->size" in trace_str or "Ljava/util/HashMap;->size" in trace_str:
+        if args:
+            map_obj = args[0].value if hasattr(args[0], 'value') else args[0]
+            ret_val = len(getattr(map_obj, '_map_data', {}))
+
+    elif "Ljava/util/Map;->keySet" in trace_str or "Ljava/util/Map;->values" in trace_str \
+            or "Ljava/util/Map;->entrySet" in trace_str:
+        # Return a collection whose _list_data the iterator hooks already walk.
+        if args:
+            map_obj = args[0].value if hasattr(args[0], 'value') else args[0]
+            data = getattr(map_obj, '_map_data', {})
+            coll = DalvikObject("Ljava/util/Set;")
+            if "keySet" in trace_str:
+                coll._list_data = [k for (k, _v) in data.values()]
+            elif "values" in trace_str:
+                coll._list_data = [v for (_k, v) in data.values()]
+            else:  # entrySet -> Map.Entry objects
+                coll._list_data = []
+                for (k, v) in data.values():
+                    entry = DalvikObject("Ljava/util/Map$Entry;")
+                    entry._entry_key = k
+                    entry._entry_value = v
+                    coll._list_data.append(entry)
+            ret_val = coll
+
+    elif "Ljava/util/Map$Entry;->getKey" in trace_str:
+        if args:
+            entry = args[0].value if hasattr(args[0], 'value') else args[0]
+            ret_val = getattr(entry, '_entry_key', None)
+
+    elif "Ljava/util/Map$Entry;->getValue" in trace_str:
+        if args:
+            entry = args[0].value if hasattr(args[0], 'value') else args[0]
+            ret_val = getattr(entry, '_entry_value', None)
+
     # =========================================================================
     # Iterator interface methods
     # =========================================================================
