@@ -253,19 +253,31 @@ def emulate_with_args(target_em, args_list, dx, parser, class_loader, method_sig
                 vm.registers[arg_start + i] = RegisterValue(val)
     
     # Execute
+    from dalvik_vm.exceptions import DalvikThrow
+    extable = class_loader.get_exception_table(target_em) if class_loader else []
     max_steps = 10000
     try:
         for step in range(max_steps):
             if vm.pc >= len(bytecode) or getattr(vm, 'finished', False):
                 break
-            
+
             if VERBOSE:
                 trace_info = trace_map.get(vm.pc)
                 if trace_info:
                     print(dim(f"    {trace_info[0]}"))
-            
-            dispatch(vm)
-            
+
+            instr_pc = vm.pc
+            try:
+                dispatch(vm)
+            except DalvikThrow as exc:
+                # Honour the top-level method's own try/catch; an uncaught throw
+                # ends the method cleanly rather than crashing the emulator.
+                target = class_loader.find_handler(extable, instr_pc, exc.type_name()) if class_loader else None
+                if target is None:
+                    return f"UNCAUGHT EXCEPTION: {exc.type_name()}"
+                vm._pending_exception = exc.exception_obj
+                vm.pc = target
+
     except AttributeError as e:
         if "'ExternalMethod'" in str(e):
             # Try to extract which external method was called
