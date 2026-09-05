@@ -28,6 +28,20 @@ from .reflection_hooks import (
     _hook_field_get,
     _hook_throwable_getcause,
 )
+from .http_hooks import (
+    _hook_url_open_connection,
+    _hook_conn_set_request_method,
+    _hook_conn_set_request_property,
+    _hook_conn_get_response_code,
+    _hook_conn_get_content_length,
+    _hook_conn_get_input_stream,
+    _hook_conn_noop,
+    _hook_stream_read,
+    _hook_baos_write,
+    _hook_baos_to_bytes,
+    _hook_baos_to_string,
+    _hook_baos_size,
+)
 
 
 # Virtual method hooks: pattern -> hook_fn
@@ -53,6 +67,33 @@ ANDROID_VIRTUAL_HOOKS: Dict[str, Callable] = {
     
     # Throwable
     "Throwable;->getCause": _hook_throwable_getcause,
+
+    # java.net HTTP -- backed by a real urllib request (see http_hooks.py).
+    # Substrings, so HttpURLConnection matches the URLConnection patterns too.
+    "URL;->openConnection": _hook_url_open_connection,
+    "URLConnection;->setRequestMethod": _hook_conn_set_request_method,
+    "URLConnection;->setRequestProperty": _hook_conn_set_request_property,
+    "URLConnection;->addRequestProperty": _hook_conn_set_request_property,
+    "URLConnection;->getResponseCode": _hook_conn_get_response_code,
+    "URLConnection;->getContentLength": _hook_conn_get_content_length,
+    "URLConnection;->getInputStream": _hook_conn_get_input_stream,
+    "URLConnection;->connect": _hook_conn_noop,
+    "URLConnection;->disconnect": _hook_conn_noop,
+    "URLConnection;->setConnectTimeout": _hook_conn_noop,
+    "URLConnection;->setReadTimeout": _hook_conn_noop,
+    "URLConnection;->setDoInput": _hook_conn_noop,
+    "URLConnection;->setDoOutput": _hook_conn_noop,
+    "URLConnection;->setUseCaches": _hook_conn_noop,
+    "URLConnection;->setInstanceFollowRedirects": _hook_conn_noop,
+
+    # java.io stream plumbing apps read the response with.
+    "InputStream;->read": _hook_stream_read,   # read([B) / read([BII)
+    "InputStream;->close": _hook_conn_noop,
+    "ByteArrayOutputStream;->write": _hook_baos_write,
+    "ByteArrayOutputStream;->toByteArray": _hook_baos_to_bytes,
+    "ByteArrayOutputStream;->toString": _hook_baos_to_string,
+    "ByteArrayOutputStream;->size": _hook_baos_size,
+    "ByteArrayOutputStream;->close": _hook_conn_noop,
 }
 
 # Static method hooks

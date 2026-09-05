@@ -442,6 +442,15 @@ def execute_invoke_direct(vm: 'DalvikVM'):
                     seed = a
             sb.internal_value = seed
 
+    # new URL(String) and new ByteArrayOutputStream() -- framework constructors
+    # with no bytecode to resolve; the HTTP hooks seed the object's state.
+    elif "Ljava/net/URL;-><init>" in trace_str:
+        from ..mocks.http_hooks import _hook_url_init
+        _hook_url_init(vm, args, trace_str)
+    elif "Ljava/io/ByteArrayOutputStream;-><init>" in trace_str:
+        from ..mocks.http_hooks import _hook_baos_init
+        _hook_baos_init(vm, args, trace_str)
+
     # Any other invoke-direct is an app constructor or a private method: run it.
     # Without this, <init> never executes, so no instance field is ever set and
     # every constructed object is blank (Rot(13).shift read back as 0).
