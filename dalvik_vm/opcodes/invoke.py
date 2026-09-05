@@ -119,6 +119,24 @@ def _builtin_virtual_hooks(vm: 'DalvikVM', args, trace_str):
                 sb.internal_value += str(arg)
             ret_val = sb
             
+    elif "Ljava/lang/StringBuilder;->reverse" in trace_str:
+        sb = args[0].value
+        if isinstance(sb, DalvikObject) and hasattr(sb, 'internal_value'):
+            sb.internal_value = sb.internal_value[::-1]
+            ret_val = sb
+
+    elif "indexOf" in trace_str and "Ljava/lang/String;" in trace_str:
+        s = args[0].value
+        text = s.internal_value if isinstance(s, DalvikObject) and hasattr(s, 'internal_value') else s
+        if isinstance(text, str) and len(args) >= 2:
+            needle = args[1].value if hasattr(args[1], 'value') else args[1]
+            # indexOf(int ch) passes a code point; indexOf(String) passes a String.
+            if isinstance(needle, int):
+                needle = chr(needle)
+            elif isinstance(needle, DalvikObject) and hasattr(needle, 'internal_value'):
+                needle = needle.internal_value
+            ret_val = text.find(needle) if isinstance(needle, str) else -1
+
     elif "toString" in trace_str:
         obj = args[0].value
         if isinstance(obj, DalvikObject) and hasattr(obj, 'internal_value'):
@@ -396,7 +414,17 @@ def execute_invoke_direct(vm: 'DalvikVM'):
     elif "Ljava/lang/StringBuilder;-><init>" in trace_str:
         sb = args[0].value
         if isinstance(sb, DalvikObject):
-            sb.internal_value = ""
+            # new StringBuilder(String)/(CharSequence) seeds the buffer; the
+            # (int capacity) and () overloads start empty. Ignoring the String
+            # arg silently dropped the input of e.g. new StringBuilder(s).reverse().
+            seed = ""
+            if len(args) >= 2 and "(I)" not in trace_str:
+                a = args[1].value if hasattr(args[1], 'value') else args[1]
+                if isinstance(a, DalvikObject) and getattr(a, 'internal_value', None) is not None:
+                    seed = a.internal_value
+                elif isinstance(a, str):
+                    seed = a
+            sb.internal_value = seed
     
     vm.pc += 5
 
