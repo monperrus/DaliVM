@@ -6,7 +6,82 @@ from typing import TYPE_CHECKING, Any, List
 if TYPE_CHECKING:
     from ..vm import DalvikVM
 
-from ..types import DalvikObject
+from base64 import b64decode, b64encode, urlsafe_b64decode, urlsafe_b64encode
+
+from ..types import DalvikObject, DalvikArray
+
+
+def _unwrap(arg) -> Any:
+    value = arg.value if hasattr(arg, 'value') else arg
+    if isinstance(value, DalvikObject) and hasattr(value, 'internal_value'):
+        return value.internal_value
+    return value
+
+
+def _as_bytes(value) -> bytes:
+    """Byte arrays live as DalvikArray/int list; strings arrive as str."""
+    if isinstance(value, DalvikArray):
+        return bytes(x & 0xFF for x in value.data)
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if isinstance(value, list):
+        return bytes(x & 0xFF for x in value)
+    return str(value).encode('utf-8', errors='replace')
+
+
+def _make_byte_array(raw: bytes) -> DalvikArray:
+    arr = DalvikArray('B', len(raw))
+    arr.data = list(raw)
+    return arr
+
+
+def _make_string(text: str) -> DalvikObject:
+    obj = DalvikObject("Ljava/lang/String;")
+    obj.internal_value = text
+    return obj
+
+
+def _base64_text(args: List) -> str:
+    """android.util.Base64 flags: NO_PADDING 1, NO_WRAP 2, URL_SAFE 8."""
+    raw = _as_bytes(_unwrap(args[0]))
+    flags = _unwrap(args[1]) if len(args) > 1 else 0
+    flags = flags if isinstance(flags, int) else 0
+    text = (urlsafe_b64encode(raw) if flags & 8 else b64encode(raw)).decode('ascii')
+    if flags & 1:
+        text = text.rstrip('=')
+    if not flags & 2:
+        text = "\n".join(text[i:i + 76] for i in range(0, len(text), 76)) + "\n"
+    return text
+
+
+def _hook_base64_encode_to_string(vm: 'DalvikVM', args: List, trace_str: str) -> Any:
+    """Base64.encodeToString(byte[], int) -> String. Upstream had no encoder at
+    all, so any app that base64-encodes its result returned nothing."""
+    if not args:
+        return None
+    return _make_string(_base64_text(args))
+
+
+def _hook_base64_encode(vm: 'DalvikVM', args: List, trace_str: str) -> Any:
+    """Base64.encode(byte[], int) -> byte[]"""
+    if not args:
+        return None
+    return _make_byte_array(_base64_text(args).encode('ascii'))
+
+
+def _hook_base64_decode(vm: 'DalvikVM', args: List, trace_str: str) -> Any:
+    """Base64.decode(String|byte[], int) -> byte[]"""
+    if not args:
+        return None
+    value = _unwrap(args[0])
+    raw = value.encode('ascii', errors='replace') if isinstance(value, str) else _as_bytes(value)
+    raw += b'=' * (-len(raw) % 4)
+    flags = _unwrap(args[1]) if len(args) > 1 else 0
+    decoder = urlsafe_b64decode if isinstance(flags, int) and flags & 8 else b64decode
+    try:
+        return _make_byte_array(decoder(raw))
+    except Exception:
+        return None
 
 
 def _hook_text_utils_is_empty(vm: 'DalvikVM', args: List, trace_str: str) -> Any:

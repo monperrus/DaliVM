@@ -54,14 +54,47 @@ def execute_invoke_virtual(vm: 'DalvikVM'):
     
     vm.pc += 5
 
+def descriptor_of(trace_str: str) -> str:
+    """The argument descriptor of the invoked method, e.g. '(C)' -> 'C'.
+
+    The overloads of append/valueOf/getBytes cannot be told apart from the
+    runtime type of a register (a char and an int are both Python ints), so
+    every hook that has overloads must look at the descriptor.
+    """
+    if "(" not in trace_str or ")" not in trace_str:
+        return ""
+    return trace_str[trace_str.index("(") + 1:trace_str.index(")")]
+
+
+def _java_text(desc: str, arg) -> str:
+    """Render an argument the way Java's String.valueOf would."""
+    if desc == "C" and isinstance(arg, int):
+        return chr(arg)
+    if desc == "Z":
+        return "true" if arg else "false"
+    if desc in ("I", "S", "B", "J") and isinstance(arg, int):
+        return str(arg)
+    if isinstance(arg, DalvikObject) and hasattr(arg, 'internal_value'):
+        return str(arg.internal_value)
+    if isinstance(arg, DalvikArray):
+        return "".join(chr(c) for c in arg.data)
+    if isinstance(arg, int):
+        return chr(arg)
+    return str(arg)
+
+
 def _builtin_virtual_hooks(vm: 'DalvikVM', args, trace_str):
     """Built-in hooks for common virtual methods."""
     ret_val = None
-    
+
     if "append" in trace_str and "Ljava/lang/StringBuilder;" in trace_str:
         sb = args[0].value
         arg = args[1].value if len(args) > 1 else None
+        desc = descriptor_of(trace_str)
         if isinstance(sb, DalvikObject) and hasattr(sb, 'internal_value'):
+            if desc:
+                sb.internal_value += _java_text(desc, arg)
+                return sb
             if isinstance(arg, int):
                 sb.internal_value += chr(arg)
             elif isinstance(arg, str):
@@ -123,17 +156,25 @@ def _builtin_virtual_hooks(vm: 'DalvikVM', args, trace_str):
             ret_val = new_arr
     
     elif "getBytes" in trace_str and "Ljava/lang/String;" in trace_str:
-        # String.getBytes() -> byte array
+        # String.getBytes([charset]) -> byte array.
+        # Java's default charset on Android is UTF-8, and getBytes("UTF-8") is
+        # the common case; encoding as UTF-16LE regardless silently produced
+        # twice as many bytes and wrong digests/ciphertexts downstream.
         if args and args[0] is not None:
             s = args[0].value
-            if isinstance(s, DalvikObject) and hasattr(s, 'internal_value'):
-                # Use surrogatepass to handle surrogate characters
-                byte_data = s.internal_value.encode('utf-16-le', errors='surrogatepass')
-                arr = DalvikArray('B', len(byte_data))
-                arr.data = list(byte_data)
-                ret_val = arr
-            elif isinstance(s, str):
-                byte_data = s.encode('utf-16-le', errors='surrogatepass')
+            text = s.internal_value if isinstance(s, DalvikObject) and hasattr(s, 'internal_value') else s
+            if isinstance(text, str):
+                charset = 'utf-8'
+                if len(args) > 1:
+                    named = args[1].value
+                    if isinstance(named, DalvikObject) and hasattr(named, 'internal_value'):
+                        named = named.internal_value
+                    if isinstance(named, str) and named:
+                        charset = named.lower().replace('utf_', 'utf-')
+                try:
+                    byte_data = text.encode(charset, errors='surrogatepass')
+                except LookupError:
+                    byte_data = text.encode('utf-8', errors='surrogatepass')
                 arr = DalvikArray('B', len(byte_data))
                 arr.data = list(byte_data)
                 ret_val = arr

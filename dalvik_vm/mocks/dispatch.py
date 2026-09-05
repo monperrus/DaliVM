@@ -15,6 +15,11 @@ from .context_hooks import (
     _hook_signature_to_chars_string,
     _hook_signature_hashcode,
 )
+from .utility_hooks import (
+    _hook_base64_encode,
+    _hook_base64_encode_to_string,
+    _hook_base64_decode,
+)
 from .reflection_hooks import (
     _hook_class_forname,
     _hook_class_getmethod,
@@ -54,6 +59,11 @@ ANDROID_VIRTUAL_HOOKS: Dict[str, Callable] = {
 ANDROID_STATIC_HOOKS: Dict[str, Callable] = {
     # Reflection - static methods
     "Class;->forName": _hook_class_forname,
+
+    # android.util.Base64 (encodeToString must come before encode: substring match)
+    "Base64;->encodeToString": _hook_base64_encode_to_string,
+    "Base64;->encode": _hook_base64_encode,
+    "Base64;->decode": _hook_base64_decode,
 }
 
 
