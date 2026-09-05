@@ -258,7 +258,7 @@ def _builtin_virtual_hooks(vm: 'DalvikVM', args, trace_str):
             data = getattr(list_obj, '_list_data', None)
             ret_val = 1 if not data else 0
 
-    elif "Ljava/util/List;->iterator" in trace_str or "Ljava/util/ArrayList;->iterator" in trace_str:
+    elif "->iterator" in trace_str and any(t in trace_str for t in ("Ljava/util/List;", "Ljava/util/ArrayList;", "Ljava/util/Set;", "Ljava/util/Collection;")):
         # List.iterator() -> returns Iterator that wraps the list
         if args:
             list_obj = args[0].value if hasattr(args[0], 'value') else args[0]
