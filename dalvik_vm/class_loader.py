@@ -84,19 +84,27 @@ class LazyClassLoader:
             EncodedMethod or None if not found
         """
         sig = f"{class_name}->{method_name}"
-        
+
         # Check cache first
         if sig in self._method_cache:
             return self._method_cache[sig]
-        
-        # Search in Androguard analysis
-        for m in self.dx.get_methods():
-            em = m.get_method()
-            if em.get_class_name() == class_name and em.get_name() == method_name:
-                self._method_cache[sig] = em
-                return em
-        
-        return None
+
+        # Search the app dex then framework analyses, preferring a definition
+        # with bytecode (see find_method_with_sig) so a framework class's
+        # <clinit> is actually found and run, not shadowed by an external ref.
+        fallback = None
+        for analysis in [self.dx, *getattr(self, 'extra_analyses', [])]:
+            for m in analysis.get_methods():
+                em = m.get_method()
+                if em.get_class_name() == class_name and em.get_name() == method_name:
+                    if hasattr(em, 'get_code') and em.get_code() is not None:
+                        self._method_cache[sig] = em
+                        return em
+                    if fallback is None:
+                        fallback = em
+
+        self._method_cache[sig] = fallback
+        return fallback
     
     def find_method_by_idx(self, method_idx: int) -> Optional[Any]:
         """Find a method by its DEX method index.

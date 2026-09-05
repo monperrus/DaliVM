@@ -401,14 +401,30 @@ def execute_invoke_direct(vm: 'DalvikVM'):
     method_idx, args = decode_invoke_args(vm)
     trace_str = getattr(vm, 'trace_map', {}).get(vm.pc - 1, ('', 0))[0]
     
-    # Handle String.<init>([C)
+    # Handle new String(char[]|byte[] [, offset, count] [, charset]) -- the
+    # native String-construction floor (StringFactory.newStringFrom*). Covers
+    # ([C), ([CII), ([B), ([BII), ([BLjava/lang/String;), ([BLjava/nio/charset/Charset;).
     if "Ljava/lang/String;-><init>" in trace_str:
         if len(args) >= 2:
             str_obj = args[0].value
-            char_arr = args[1].value
-            if isinstance(str_obj, DalvikObject) and isinstance(char_arr, DalvikArray):
-                chars = "".join([chr(c) for c in char_arr.data])
-                str_obj.internal_value = chars
+            arr = args[1].value if hasattr(args[1], 'value') else args[1]
+            if isinstance(str_obj, DalvikObject) and isinstance(arr, DalvikArray):
+                data = arr.data
+                # optional offset/count are the first two trailing int args
+                ints = [a.value if hasattr(a, 'value') else a for a in args[2:]]
+                ints = [x for x in ints if isinstance(x, int)]
+                if len(ints) >= 2:
+                    off, cnt = ints[0], ints[1]
+                    data = data[off:off + cnt]
+                is_bytes = (getattr(arr, 'type_desc', None) in ('B', '[B')) or "([B" in trace_str
+                if is_bytes:
+                    raw = bytes((b & 0xFF) for b in data)
+                    try:
+                        str_obj.internal_value = raw.decode('utf-8')
+                    except Exception:
+                        str_obj.internal_value = raw.decode('latin-1')
+                else:
+                    str_obj.internal_value = "".join(chr(c & 0xFFFF) for c in data)
     
     # Handle StringBuilder.<init>()
     elif "Ljava/lang/StringBuilder;-><init>" in trace_str:
@@ -597,6 +613,20 @@ def _builtin_static_hooks(vm: 'DalvikVM', args, trace_str):
     elif "Character;->toUpperCase" in trace_str and args:
         cp = args[0].value if hasattr(args[0], 'value') else args[0]
         ret_val = ord(chr(cp).upper()) if isinstance(cp, int) else cp
+
+    elif "Math;->max" in trace_str and len(args) >= 2:
+        a0 = args[0].value if hasattr(args[0], 'value') else args[0]
+        a1 = args[1].value if hasattr(args[1], 'value') else args[1]
+        ret_val = max(a0, a1) if isinstance(a0, (int, float)) and isinstance(a1, (int, float)) else a0
+
+    elif "Math;->min" in trace_str and len(args) >= 2:
+        a0 = args[0].value if hasattr(args[0], 'value') else args[0]
+        a1 = args[1].value if hasattr(args[1], 'value') else args[1]
+        ret_val = min(a0, a1) if isinstance(a0, (int, float)) and isinstance(a1, (int, float)) else a0
+
+    elif "Math;->abs" in trace_str and args:
+        a0 = args[0].value if hasattr(args[0], 'value') else args[0]
+        ret_val = abs(a0) if isinstance(a0, (int, float)) else a0
 
     elif "Character;->forDigit" in trace_str and len(args) >= 2:
         digit = args[0].value if hasattr(args[0], 'value') else args[0]
