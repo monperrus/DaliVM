@@ -63,7 +63,16 @@ class LazyClassLoader:
         # Caches
         self._method_cache: Dict[str, Any] = {}  # signature -> EncodedMethod
         self._bytecode_cache: Dict[str, Tuple[bytes, int, dict]] = {}  # sig -> (bytecode, regs, trace_map)
-    
+
+        # Additional Analysis objects to resolve against when the app's own dex
+        # does not define a method -- e.g. the device's framework DEX
+        # (core-oj.jar), so an unhooked java.*/android.* method runs its real
+        # bytecode instead of falling through to a Python hook or a mock.
+        self.extra_analyses: list = []
+
+    def add_framework_analysis(self, analysis) -> None:
+        self.extra_analyses.append(analysis)
+
     def find_method(self, class_name: str, method_name: str) -> Optional[Any]:
         """Find a method by class and method name.
         
@@ -187,22 +196,19 @@ class LazyClassLoader:
         if cache_key in self._method_cache:
             return self._method_cache[cache_key]
         
-        # Search in Androguard analysis
-        for m in self.dx.get_methods():
-            em = m.get_method()
-            if em.get_class_name() == class_name and em.get_name() == method_name:
-                # If we have an expected signature, verify it matches
-                if expected_sig:
-                    actual_desc = em.get_descriptor() if hasattr(em, 'get_descriptor') else ''
-                    # Normalize both signatures for comparison (remove spaces)
-                    actual_normalized = actual_desc.replace(' ', '')
-                    expected_normalized = expected_sig.replace(' ', '')
-                    if actual_normalized != expected_normalized:
-                        continue  # Keep looking for matching overload
-                
-                self._method_cache[cache_key] = em
-                return em
-        
+        # Search the app's dex, then any attached framework analyses.
+        for analysis in [self.dx, *self.extra_analyses]:
+            for m in analysis.get_methods():
+                em = m.get_method()
+                if em.get_class_name() == class_name and em.get_name() == method_name:
+                    if expected_sig:
+                        actual = (em.get_descriptor() if hasattr(em, 'get_descriptor') else '').replace(' ', '')
+                        if actual != expected_sig.replace(' ', ''):
+                            continue  # keep looking for the matching overload
+                    self._method_cache[cache_key] = em
+                    return em
+
+        self._method_cache[cache_key] = None
         return None
     
     def get_exception_table(self, method):
