@@ -44,8 +44,10 @@ def execute_invoke_virtual(vm: 'DalvikVM'):
         should_try_resolve = not any(p in trace_str for p in skip_patterns)
         
         if should_try_resolve and "->" in trace_str:
-            # Extract method info and try to execute
-            ret_val = vm.class_loader.resolve_and_execute(method_idx, args, vm)
+            # Extract method info and try to execute. virtual=True so an
+            # interface/abstract target re-resolves on the receiver's runtime
+            # type (true virtual dispatch: Transform.apply -> Reverse.step).
+            ret_val = vm.class_loader.resolve_and_execute(method_idx, args, vm, trace_str, virtual=True)
     
     if ret_val is not None:
         vm.last_result = RegisterValue(ret_val)
@@ -649,7 +651,7 @@ def execute_invoke_static(vm: 'DalvikVM'):
     # Try class loader for cross-class static method calls
     if vm.class_loader:
         # Call the method - it may modify arguments in place (for void methods)
-        # Pass trace_str for reliable method lookup in multi-dex APKs
+        # Pass trace_str for reliable method lookup in multi-dex APKs.
         ret_val = vm.class_loader.resolve_and_execute(method_idx, args, vm, trace_str)
         # Verbose output for return value
         if getattr(vm, 'verbose', False) and ret_val is not None:

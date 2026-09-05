@@ -445,7 +445,37 @@ class LazyClassLoader:
         
         store.mark_class_initialized(class_name)
     
-    def resolve_and_execute(self, method_idx: int, args: list, parent_vm: 'DalvikVM', trace_str: str = "") -> Any:
+    def _superclass_of(self, class_name: str) -> Optional[str]:
+        """Superclass name of an app class, via Androguard (cached)."""
+        if getattr(self, '_superclass_map', None) is None:
+            self._superclass_map = {}
+            for ca in self.dx.get_classes():
+                try:
+                    vmcls = ca.get_vm_class()
+                    if vmcls is not None:
+                        self._superclass_map[vmcls.get_name()] = vmcls.get_superclassname()
+                except Exception:
+                    continue
+        return self._superclass_map.get(class_name)
+
+    def resolve_virtual(self, runtime_class: str, method_name: str, descriptor: str):
+        """Virtual dispatch: find the method actually run for a call on an object
+        of ``runtime_class``, walking up the superclass chain to the first
+        implementation that has bytecode. This is what turns an interface/abstract
+        call (Transform.apply) into the concrete override (AbstractTransform.apply,
+        then its abstract step() into Reverse.step/Rot.step)."""
+        seen = set()
+        cls = runtime_class
+        while cls and cls not in seen and cls != "Ljava/lang/Object;":
+            seen.add(cls)
+            m = self.find_method_with_sig(cls, method_name, descriptor)
+            if m is not None and self.get_method_bytecode(m):
+                return m
+            cls = self._superclass_of(cls)
+        return None
+
+    def resolve_and_execute(self, method_idx: int, args: list, parent_vm: 'DalvikVM',
+                            trace_str: str = "", virtual: bool = False) -> Any:
         """Resolve a method by index and execute it.
         
         This is the main entry point called by invoke handlers.
@@ -474,5 +504,16 @@ class LazyClassLoader:
                 method_name = self.parser.get_method_name(method_idx)
                 print(warn(f"[DEBUG] Could not find method by idx {method_idx}: {method_name}"))
             return None
-        
+
+        # Virtual dispatch: if the statically-resolved method has no bytecode
+        # (an interface/abstract declaration) and we have a real receiver object,
+        # re-resolve on the receiver's runtime type.
+        if virtual and args and not self.get_method_bytecode(method):
+            recv = args[0].value if hasattr(args[0], 'value') else args[0]
+            recv_class = getattr(recv, 'class_name', None) if isinstance(recv, DalvikObject) else None
+            if recv_class and recv_class.startswith('L'):
+                concrete = self.resolve_virtual(recv_class, method.get_name(), method.get_descriptor())
+                if concrete is not None:
+                    method = concrete
+
         return self.execute_method(method, args, parent_vm)
