@@ -82,8 +82,8 @@ def execute_move_result_object(vm: 'DalvikVM'):
     vm.pc += 1
 
 def execute_move_exception(vm: 'DalvikVM'):
-    """move-exception vAA (11x)"""
+    """move-exception vAA (11x) -- the object the loop caught into the register."""
     reg = vm.bytecode[vm.pc]
-    # Mock exception object
-    vm.registers[reg] = RegisterValue(None)
+    vm.registers[reg] = RegisterValue(getattr(vm, '_pending_exception', None))
+    vm._pending_exception = None
     vm.pc += 1

@@ -48,7 +48,9 @@ def execute_monitor_exit(vm: 'DalvikVM'):
     vm.pc += 1
 
 def execute_throw(vm: 'DalvikVM'):
-    """throw vAA (11x)"""
-    # Just mark finished for now
-    vm.finished = True
+    """throw vAA (11x) -- raise so the loop can match a catch handler."""
+    from ..exceptions import DalvikThrow
+    reg = vm.bytecode[vm.pc]
     vm.pc += 1
+    obj = vm.registers[reg].value if hasattr(vm.registers[reg], 'value') else vm.registers[reg]
+    raise DalvikThrow(obj)

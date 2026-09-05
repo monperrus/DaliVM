@@ -205,6 +205,80 @@ class LazyClassLoader:
         
         return None
     
+    def get_exception_table(self, method):
+        """Try/catch table of a method, as byte ranges into the raw bytecode:
+
+            [(start_byte, end_byte, [(catch_type_name, handler_byte), ...],
+              catch_all_byte_or_None), ...]
+
+        Dalvik addresses are in 16-bit code units; the VM's pc is a byte offset,
+        so everything is doubled. Cached per method signature."""
+        if getattr(self, '_extable_cache', None) is None:
+            self._extable_cache = {}
+        sig = f"{method.get_class_name()}->{method.get_name()}{method.get_descriptor()}"
+        if sig in self._extable_cache:
+            return self._extable_cache[sig]
+
+        table = []
+        try:
+            code = method.get_code()
+            tries = code.get_tries() if code else []
+            handler_list = code.get_handlers() if code else None
+            by_off = {}
+            if handler_list is not None:
+                # try.handler_off is relative to the handler-list start; androguard's
+                # handler.get_off() is absolute, so subtract the list base.
+                list_base = handler_list.get_off()
+                for h in handler_list.get_list():
+                    by_off[h.get_off() - list_base] = h
+            cm = getattr(method, 'CM', None)
+            for t in tries:
+                start = t.get_start_addr() * 2
+                end = (t.get_start_addr() + t.get_insn_count()) * 2
+                h = by_off.get(t.get_handler_off())
+                if h is None:
+                    continue
+                catches = []
+                for pair in h.get_handlers():
+                    tname = cm.get_type(pair.get_type_idx()) if cm else None
+                    catches.append((tname, pair.get_addr() * 2))
+                catch_all = h.get_catch_all_addr() * 2 if h.get_size() <= 0 else None
+                table.append((start, end, catches, catch_all))
+        except Exception:
+            table = []
+        self._extable_cache[sig] = table
+        return table
+
+    def find_handler(self, table, pc: int, thrown_class: Optional[str]) -> Optional[int]:
+        """The byte address to jump to for an exception of ``thrown_class`` raised
+        at ``pc``, or None if this method does not catch it."""
+        for (start, end, catches, catch_all) in table:
+            if not (start <= pc < end):
+                continue
+            for (tname, addr) in catches:
+                if tname and self._is_assignable(thrown_class, tname):
+                    return addr
+            if catch_all is not None:
+                return catch_all
+        return None
+
+    def _is_assignable(self, thrown: Optional[str], caught: str) -> bool:
+        """True if a ``thrown`` object is caught by ``caught`` (same class or a
+        subclass). App types walk the superclass chain; unknown/framework types
+        match by exact name (a reasonable approximation without the full JDK)."""
+        if not thrown:
+            return caught in ("Ljava/lang/Throwable;", "Ljava/lang/Exception;")
+        if caught in ("Ljava/lang/Throwable;", "Ljava/lang/Exception;",
+                      "Ljava/lang/RuntimeException;"):
+            return True  # common catch-broad types
+        cls, seen = thrown, set()
+        while cls and cls not in seen and cls != "Ljava/lang/Object;":
+            if cls == caught:
+                return True
+            seen.add(cls)
+            cls = self._superclass_of(cls)
+        return False
+
     def get_method_bytecode(self, method) -> Optional[Tuple[bytes, int, dict]]:
         """Get bytecode, register count, and trace map for a method.
         
@@ -312,28 +386,32 @@ class LazyClassLoader:
                 child_vm.registers[start_reg + i] = RegisterValue(arg)
         
         # Execute
+        from .exceptions import DalvikThrow
+        extable = self.get_exception_table(method)
         max_steps = 5000
         step = 0
         while child_vm.pc < len(bytecode) and step < max_steps:
             if getattr(child_vm, 'finished', False):
                 break
-            
+
+            instr_pc = child_vm.pc  # address of the instruction, for catch lookup
             opcode = child_vm.bytecode[child_vm.pc]
             child_vm.pc += 1
-            
-            # Get trace for debugging
-            trace_info = trace_map.get(child_vm.pc - 1)
-            if trace_info:
-                instr_str, _ = trace_info
-                # Optionally print: print(f"  {instr_str}")
-            
+
             handler = HANDLERS.get(opcode)
             if handler:
-                handler(child_vm)
+                try:
+                    handler(child_vm)
+                except DalvikThrow as exc:
+                    target = self.find_handler(extable, instr_pc, exc.type_name())
+                    if target is None:
+                        raise
+                    child_vm._pending_exception = exc.exception_obj
+                    child_vm.pc = target
             else:
                 print(f"WARN: Unimplemented opcode 0x{opcode:02x} in {method.get_name()}")
                 break
-            
+
             step += 1
         
         # Return the result
