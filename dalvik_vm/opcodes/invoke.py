@@ -478,17 +478,16 @@ def _builtin_static_hooks(vm: 'DalvikVM', args, trace_str):
                 str_obj.internal_value = str(arg)
             ret_val = str_obj
     
-    # Integer.parseInt - parses string to int
+    # Integer.parseInt(String [, radix]) - honour the radix (was base-10 only).
     elif "Integer;->parseInt" in trace_str:
         if args:
             arg = args[0].value if hasattr(args[0], 'value') else args[0]
+            radix = args[1].value if len(args) >= 2 and hasattr(args[1], 'value') else 10
+            radix = radix if isinstance(radix, int) else 10
+            s = arg.internal_value if isinstance(arg, DalvikObject) and hasattr(arg, 'internal_value') else arg
             try:
-                if isinstance(arg, DalvikObject) and hasattr(arg, 'internal_value'):
-                    ret_val = int(arg.internal_value)
-                elif isinstance(arg, str):
-                    ret_val = int(arg)
-                else:
-                    ret_val = 0
+                n = int(str(s), radix) & 0xFFFFFFFF
+                ret_val = n - 0x100000000 if n > 0x7FFFFFFF else n
             except (ValueError, TypeError):
                 ret_val = 0
     
